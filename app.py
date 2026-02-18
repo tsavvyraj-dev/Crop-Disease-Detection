@@ -1,12 +1,33 @@
-from flask import Flask, render_template,request,redirect,send_from_directory,url_for
+from flask import Flask, render_template, request, redirect, send_from_directory, url_for
 import numpy as np
 import json
 import uuid
+import os
 import tensorflow as tf
 
+# ---------------- APP SETUP ----------------
 app = Flask(__name__)
-model = tf.keras.models.load_model("models/plant_disease_recog_model_pwp.keras")
-label = ['Apple___Apple_scab',
+
+# Reduce TensorFlow log noise (important on cloud)
+tf.get_logger().setLevel('ERROR')
+
+# Base directory (IMPORTANT for deployment)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# ---------------- PATH CONFIG ----------------
+MODEL_PATH = os.path.join(BASE_DIR, "models", "plant_disease_recog_model_pwp.keras")
+JSON_PATH = os.path.join(BASE_DIR, "plant_disease.json")
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploadimages")
+
+# Create upload folder automatically (cloud-safe)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+# ---------------- LOAD MODEL ----------------
+model = tf.keras.models.load_model(MODEL_PATH)
+
+# ---------------- LABELS ----------------
+label = [
+ 'Apple___Apple_scab',
  'Apple___Black_rot',
  'Apple___Cedar_apple_rust',
  'Apple___healthy',
@@ -44,47 +65,62 @@ label = ['Apple___Apple_scab',
  'Tomato___Target_Spot',
  'Tomato___Tomato_Yellow_Leaf_Curl_Virus',
  'Tomato___Tomato_mosaic_virus',
- 'Tomato___healthy']
+ 'Tomato___healthy'
+]
 
-with open("plant_disease.json",'r') as file:
+# ---------------- LOAD JSON ----------------
+with open(JSON_PATH, 'r') as file:
     plant_disease = json.load(file)
 
-# print(plant_disease[4])
+# ---------------- ROUTES ----------------
 
 @app.route('/uploadimages/<path:filename>')
 def uploaded_images(filename):
-    return send_from_directory('./uploadimages', filename)
+    return send_from_directory(UPLOAD_FOLDER, filename)
 
-@app.route('/',methods = ['GET'])
+@app.route('/', methods=['GET'])
 def home():
     return render_template('home.html')
 
-def extract_features(image):
-    image = tf.keras.utils.load_img(image,target_size=(160,160))
+
+# ---------------- IMAGE PROCESSING ----------------
+def extract_features(image_path):
+    image = tf.keras.utils.load_img(image_path, target_size=(160, 160))
     feature = tf.keras.utils.img_to_array(image)
     feature = np.array([feature])
     return feature
 
-def model_predict(image):
-    img = extract_features(image)
+
+def model_predict(image_path):
+    img = extract_features(image_path)
     prediction = model.predict(img)
-    # print(prediction)
     prediction_label = plant_disease[prediction.argmax()]
     return prediction_label
 
-@app.route('/upload/',methods = ['POST','GET'])
+
+# ---------------- UPLOAD HANDLER ----------------
+@app.route('/upload/', methods=['POST', 'GET'])
 def uploadimage():
     if request.method == "POST":
         image = request.files['img']
-        temp_name = f"uploadimages/temp_{uuid.uuid4().hex}"
-        image.save(f'{temp_name}_{image.filename}')
-        print(f'{temp_name}_{image.filename}')
-        prediction = model_predict(f'./{temp_name}_{image.filename}')
-        return render_template('home.html',result=True,imagepath = f'/{temp_name}_{image.filename}', prediction = prediction )
-    
-    else:
-        return redirect('/')
-        
-    
+
+        unique_name = f"temp_{uuid.uuid4().hex}_{image.filename}"
+        save_path = os.path.join(UPLOAD_FOLDER, unique_name)
+
+        image.save(save_path)
+
+        prediction = model_predict(save_path)
+
+        return render_template(
+            'home.html',
+            result=True,
+            imagepath=f'/uploadimages/{unique_name}',
+            prediction=prediction
+        )
+
+    return redirect('/')
+
+
+# ---------------- LOCAL RUN ----------------
 if __name__ == "__main__":
     app.run(debug=True)
